@@ -17,3 +17,9 @@ type reCaptchaV2 struct {
 	Interval  int    `json:"interval"`
 }
 ```
+
+## API
+
+* POST `/start`: start solving loop and put result in redis
+* POST `/getOne`: get one [`response` result](https://developers.google.com/recaptcha/docs/verify#api_request)
+* POST `/stop`: stop the solving loop
