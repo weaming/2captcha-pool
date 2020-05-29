@@ -82,10 +82,10 @@ func main() {
 
 		v := getOne(task)
 		if v == nil {
-			c.String(http.StatusAccepted, "not ready")
+			c.JSON(http.StatusAccepted, map[string]interface{}{"message": "not ready"})
 			return
 		}
-		c.JSON(http.StatusOK, v)
+		c.JSON(http.StatusOK, map[string]interface{}{"g-recaptcha-response": v})
 	})
 
 	router.Run()
@@ -176,7 +176,7 @@ func reCaptchaResult(site *Site, captchaID string) {
 		}
 
 	wait:
-		time.Sleep(2)
+		time.Sleep(2 * time.Second)
 	}
 }
 
