@@ -7,172 +7,142 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	redis "github.com/go-redis/redis/v7"
 )
 
 var (
-	API_KEY         = getEnvDefault("API_KEY", "")
-	REDIS_HOST_PORT = getEnvDefault("REDIS_HOST_PORT", "localhost:6379")
+	API_KEY = getEnvDefault("API_KEY", "")
 )
 
-var rds = redis.NewClient(&redis.Options{
-	Addr:     REDIS_HOST_PORT,
-	Password: "", // no password set
-	DB:       0,  // use default DB
-})
-var chanMap = make(map[string]chan bool)
+var siteMap = make(map[string]*Site)
+var lock = sync.RWMutex{}
 
-type reCaptchaV2 struct {
+type Task struct {
 	GoogleKey string `json:"googleKey"`
-	PageUrl   string `json:"pageUrl"`
+	PageURL   string `json:"pageUrl"`
 	Size      int    `json:"size"`
 	Interval  int    `json:"interval"`
+	Lives     int    `json:"lives"` // after n token unused, stop loop
+}
+
+type Site struct {
+	sync.Mutex // lock for idle state
+	task       *Task
+	ids        chan string
+	results    *Cache
+	stop       chan bool
+	idle       bool
+}
+
+func (s *Site) Stop() {
+	s.Lock()
+	defer s.Unlock()
+	s.idle = true
+	s.stop <- true
 }
 
 func main() {
-	log.Println(API_KEY, REDIS_HOST_PORT)
-	_, err := rds.Ping().Result()
-	if err != nil {
-		log.Fatal(err)
-	}
+	log.Println(API_KEY)
 
 	router := gin.Default()
-	router.POST("/start", func(c *gin.Context) {
-		var re reCaptchaV2
-		err := c.BindJSON(&re)
+	router.POST("/getOne", func(c *gin.Context) {
+		task := &Task{}
+		err := c.BindJSON(task)
 		if err != nil {
 			c.String(http.StatusBadRequest, err.Error())
 			return
 		}
 
-		googleKey := re.GoogleKey
-		pageUrl := re.PageUrl
+		googleKey := task.GoogleKey
+		pageURL := task.PageURL
 
 		if googleKey == "" {
 			c.String(http.StatusBadRequest, "missing googleKey")
 			return
 		}
-		if pageUrl == "" {
+		if pageURL == "" {
 			c.String(http.StatusBadRequest, "missing pageUrl")
 			return
 		}
-		if re.Size <= 0 {
+		if task.Size == 0 {
 			c.String(http.StatusBadRequest, "missing size")
 			return
 		}
-		if re.Interval <= 0 {
+		if task.Interval == 0 {
 			c.String(http.StatusBadRequest, "missing interval")
 			return
 		}
-
-		key := keyOf(googleKey, pageUrl)
-		if _, ok := chanMap[key]; ok {
-			c.String(http.StatusOK, "has been started")
+		if task.Lives == 0 {
+			c.String(http.StatusBadRequest, "missing lives")
 			return
 		}
 
-		exit := make(chan bool, 1)
-		chanMap[key] = exit
-		go reCaptchaTask(googleKey, pageUrl, re.Size, re.Interval, exit)
-
-		c.String(http.StatusOK, "started")
-	})
-
-	router.POST("/getOne", func(c *gin.Context) {
-		var re reCaptchaV2
-		err := c.BindJSON(&re)
-		if err != nil {
-			c.String(http.StatusBadRequest, err.Error())
-			return
-		}
-
-		googleKey := re.GoogleKey
-		pageUrl := re.PageUrl
-
-		if googleKey == "" {
-			c.String(http.StatusBadRequest, "missing googleKey")
-			return
-		}
-		if pageUrl == "" {
-			c.String(http.StatusBadRequest, "missing pageUrl")
-			return
-		}
-
-		one := redisGetOne(googleKey, pageUrl)
-		if one == "" {
+		v := getOne(task)
+		if v == nil {
 			c.String(http.StatusAccepted, "not ready")
 			return
 		}
-		c.String(http.StatusOK, one)
-	})
-
-	router.POST("/stop", func(c *gin.Context) {
-		var re reCaptchaV2
-		err := c.BindJSON(&re)
-		if err != nil {
-			c.String(http.StatusBadRequest, err.Error())
-			return
-		}
-
-		googleKey := re.GoogleKey
-		pageUrl := re.PageUrl
-
-		if googleKey == "" {
-			c.String(http.StatusBadRequest, "missing googleKey")
-			return
-		}
-		if pageUrl == "" {
-			c.String(http.StatusBadRequest, "missing pageUrl")
-			return
-		}
-
-		key := keyOf(googleKey, pageUrl)
-		if ch, ok := chanMap[key]; !ok {
-			c.String(http.StatusNotFound, "not found")
-		} else {
-			ch <- true
-			c.String(http.StatusOK, "stopped")
-		}
+		c.JSON(http.StatusOK, v)
 	})
 
 	router.Run()
 }
 
-func keyOf(googleKey, pageUrl string) string {
-	return fmt.Sprintf("rechaptcha:%s:%s", googleKey, pageUrl)
-}
+func getOne(task *Task) interface{} {
+	lock.Lock()
+	defer lock.Unlock()
 
-func keyInNS(k string) string {
-	return fmt.Sprintf("rechaptcha:%s", k)
-}
-
-func redisAdd(googleKey, pageUrl, response string) {
-	rds.SAdd(keyOf(googleKey, pageUrl), response)
-	rds.Set(keyInNS(response), "1", 110*time.Second)
-}
-
-func redisGetOne(googleKey, pageUrl string) string {
-	for {
-		response, err := rds.SPop(keyOf(googleKey, pageUrl)).Result()
-		if err != nil {
-			log.Println(err)
-			return ""
+	key := fmt.Sprintf("%s:%s", task.PageURL, task.GoogleKey)
+	if site, ok := siteMap[key]; ok {
+		site.task = task
+		if site.idle {
+			site.idle = false
+			go reCaptchaTask(site)
 		}
-
-		if v, err := rds.Get(keyInNS(response)).Result(); err != nil {
-			log.Println(err)
-			return ""
-		} else if v != "" {
-			rds.Del(keyInNS(response))
-			return response
+		return getFromSite(site)
+	} else {
+		site := &Site{
+			task: task,
+			ids:  make(chan string, task.Size*10),
+			stop: make(chan bool, 1),
+			idle: false,
 		}
+		fn := func(cache *Cache, key string) {
+			site.task.Lives--
+			if site.task.Lives <= 0 {
+				site.Stop()
+			}
+		}
+		site.results = NewCache(&fn)
+		siteMap[key] = site
+		go reCaptchaTask(site)
+		return nil
 	}
 }
 
-func reCaptchaResult(googleKey, pageUrl, captchaID string) string {
+func getFromSite(site *Site) interface{} {
+begin:
+	select {
+	case id := <-site.ids:
+		v, ok := site.results.Get(id)
+		if ok {
+			return v
+		}
+		goto begin
+	default:
+		return nil
+	}
+}
+
+func addToSite(site *Site, captchaID, reCaptchaResponse string) {
+	site.ids <- captchaID
+	site.results.Set(captchaID, reCaptchaResponse, 100*time.Second)
+}
+
+func reCaptchaResult(site *Site, captchaID string) {
 	n := 0
 	for {
 		n++
@@ -192,9 +162,17 @@ func reCaptchaResult(googleKey, pageUrl, captchaID string) string {
 			if strings.Contains(body2, "CAPCHA_NOT_READY") {
 				goto wait
 			}
-			reCaptchaResponse := strings.SplitN(body2, "|", 2)[1]
-			redisAdd(googleKey, pageUrl, reCaptchaResponse)
-			return reCaptchaResponse
+			arr := strings.SplitN(body2, "|", 2)
+			if len(arr) < 2 {
+				log.Println(body2)
+				if body2 == "ERROR_CAPTCHA_UNSOLVABLE" {
+					return
+				}
+				goto wait
+			}
+			reCaptchaResponse := arr[1]
+			addToSite(site, captchaID, reCaptchaResponse)
+			return
 		}
 
 	wait:
@@ -202,19 +180,21 @@ func reCaptchaResult(googleKey, pageUrl, captchaID string) string {
 	}
 }
 
-func reCaptchaTask(googleKey, pageUrl string, size, interval int, exit <-chan bool) {
-	tasks := make(chan int, size)
+func reCaptchaTask(site *Site) {
+	tasks := make(chan int, site.task.Size)
 
 	newTask := func() {
 		defer func() { <-tasks }()
 
-		res, err := http.Post(fmt.Sprintf("http://2captcha.com/in.php?key=%s&method=userrecaptcha&googlekey=%s&pageurl=%s", API_KEY, googleKey, pageUrl), "plain/text", nil)
+		url := fmt.Sprintf("http://2captcha.com/in.php?key=%s&method=userrecaptcha&googlekey=%s&pageurl=%s", API_KEY, site.task.GoogleKey, site.task.PageURL)
+		res, err := http.Post(url, "plain/text", nil)
 		if err != nil {
 			log.Println(err)
 			return
 		}
 		if res.Body != nil {
 			body := readBody(res)
+			log.Println(body)
 			if body == "ERROR_ZERO_BALANCE" {
 				log.Fatal("ERROR_ZERO_BALANCE")
 			}
@@ -224,7 +204,7 @@ func reCaptchaTask(googleKey, pageUrl string, size, interval int, exit <-chan bo
 			if captchaID == "" {
 				return
 			}
-			reCaptchaResult(googleKey, pageUrl, captchaID)
+			reCaptchaResult(site, captchaID)
 		}
 	}
 
@@ -232,17 +212,13 @@ func reCaptchaTask(googleKey, pageUrl string, size, interval int, exit <-chan bo
 		select {
 		case tasks <- 1:
 			go newTask()
-			time.Sleep(10 * time.Second)
+			time.Sleep(time.Duration(site.task.Interval) * time.Second)
+		case <-site.stop:
+			log.Println("stop creating new task")
+			return
 		default:
-			select {
-			case <-exit:
-				log.Println("stop creating new task")
-				delete(chanMap, keyOf(googleKey, pageUrl))
-				return
-			default:
-				time.Sleep(time.Duration(interval) * time.Second)
-				continue
-			}
+			time.Sleep(3 * time.Second)
+			continue
 		}
 	}
 }
