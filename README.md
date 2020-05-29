@@ -3,7 +3,7 @@
 [2captcha.com](https://2captcha.com) 's result pool
 
 ```shell
-docker run -it --rm -e REDIS_HOST_PORT=host.docker.internal:6379 -e API_KEY=<your-2captcha-key> weaming/2captcha-pool
+docker run -it --rm -e API_KEY=<your-2captcha-key> weaming/2captcha-pool
 ```
 
 ```go
