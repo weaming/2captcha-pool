@@ -1,14 +1,17 @@
 package main
 
-import "sync"
+import (
+	"log"
+	"sync"
+)
 
 type Task struct {
 	GoogleKey string `json:"googleKey"`
 	PageURL   string `json:"pageUrl"`
-	Size      int    `json:"size"`      // 同时运行的破解任务个数
-	Interval  int    `json:"interval"`  // 破解间隔时间
-	Lives     int    `json:"lives"`     // n 个未使用破解结果，则进入休眠
-	NoLimit   bool   `json:"not_limit"` // 不限制过期个数，永久保持热身
+	Size      int    `json:"size"`     // 同时运行的破解任务个数
+	Interval  int    `json:"interval"` // 破解间隔时间
+	Lives     int    `json:"lives"`    // n 个未使用破解结果，则进入休眠
+	NoLimit   bool   `json:"no_limit"` // 不限制过期个数，永久保持热身
 }
 
 type Site struct {
@@ -27,6 +30,10 @@ func (s *Site) Stop() {
 	if s.idle {
 		return
 	}
+
+	defer func() {
+		log.Println(keyOfTask(s.task), "已停止")
+	}()
 
 	s.idle = true
 	s.stop <- true

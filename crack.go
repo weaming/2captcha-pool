@@ -10,11 +10,23 @@ import (
 	"time"
 )
 
+var client = &http.Client{
+	Transport: &http.Transport{
+		MaxIdleConnsPerHost: 1024,
+		MaxIdleConns:        0,
+	},
+	Timeout: 10 * time.Second,
+}
+
+func keyOfTask(task *Task) string {
+	return fmt.Sprintf("%s:%s:%v", task.PageURL, task.GoogleKey, task.NoLimit)
+}
+
 func GetOneCrackResult(task *Task) interface{} {
 	lock.Lock()
 	defer lock.Unlock()
 
-	key := fmt.Sprintf("%s:%s:%v", task.PageURL, task.GoogleKey, task.NoLimit)
+	key := keyOfTask(task)
 	if site, ok := siteMap[key]; ok {
 		site.task = task
 		if site.idle {
@@ -46,14 +58,16 @@ func GetOneCrackResult(task *Task) interface{} {
 	}
 }
 
-func StopSite(task *Task) {
+func StopSite(task *Task) bool {
 	lock.Lock()
 	defer lock.Unlock()
 
-	key := fmt.Sprintf("%s:%s", task.PageURL, task.GoogleKey)
+	key := keyOfTask(task)
 	if site, ok := siteMap[key]; ok {
 		site.Stop()
+		return true
 	}
+	return false
 }
 
 func getFromSite(site *Site) interface{} {
@@ -82,7 +96,7 @@ func reCaptchaResult(site *Site, captchaID string) {
 		n++
 		log.Printf("查看进度 %v 尝试次数 %v (已有 %v)", captchaID, n, site.results.Keys())
 
-		res, err := http.Get(fmt.Sprintf("http://2captcha.com/res.php?key=%s&action=get&id=%s", API_KEY, captchaID))
+		res, err := client.Get(fmt.Sprintf("http://2captcha.com/res.php?key=%s&action=get&id=%s", API_KEY, captchaID))
 		if err != nil {
 			log.Println("get:", err)
 			if res.Body != nil {
@@ -122,7 +136,7 @@ func reCaptchaTask(site *Site) {
 		defer func() { <-tasks }()
 
 		url := fmt.Sprintf("http://2captcha.com/in.php?key=%s&method=userrecaptcha&googlekey=%s&pageurl=%s", API_KEY, site.task.GoogleKey, site.task.PageURL)
-		res, err := http.Post(url, "plain/text", nil)
+		res, err := client.Post(url, "plain/text", nil)
 		if err != nil {
 			log.Println(err)
 			return
@@ -139,10 +153,12 @@ func reCaptchaTask(site *Site) {
 			if captchaID == "" {
 				return
 			}
+			// get crack result
 			reCaptchaResult(site, captchaID)
 		}
 	}
 
+	// create new task every task.interval seconds util get the limit of task.Size
 	for {
 		select {
 		case tasks <- 1:
@@ -152,7 +168,7 @@ func reCaptchaTask(site *Site) {
 			log.Println("stop creating new task")
 			return
 		default:
-			time.Sleep(3 * time.Second)
+			time.Sleep(time.Second)
 			continue
 		}
 	}

@@ -79,8 +79,7 @@ func main() {
 			return
 		}
 
-		StopSite(task)
-		c.JSON(http.StatusOK, map[string]interface{}{"stopped": true})
+		c.JSON(http.StatusOK, map[string]interface{}{"stopped": StopSite(task)})
 	})
 
 	router.Run()
