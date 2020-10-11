@@ -99,7 +99,7 @@ func reCaptchaResult(site *Site, captchaID string) {
 		res, err := client.Get(fmt.Sprintf("http://2captcha.com/res.php?key=%s&action=get&id=%s", API_KEY, captchaID))
 		if err != nil {
 			log.Println("get:", err)
-			if res.Body != nil {
+			if res != nil && res.Body != nil {
 				res.Body.Close()
 			}
 			goto wait
@@ -139,6 +139,9 @@ func reCaptchaTask(site *Site) {
 		res, err := client.Post(url, "plain/text", nil)
 		if err != nil {
 			log.Println(err)
+			if res != nil && res.Body != nil {
+				res.Body.Close()
+			}
 			return
 		}
 		if res.Body != nil {
@@ -175,13 +178,12 @@ func reCaptchaTask(site *Site) {
 }
 
 func readBody(res *http.Response) string {
-	body := res.Body
-	if body == nil {
+	if res == nil || res.Body == nil {
 		return ""
 	}
+	defer res.Body.Close()
 
-	defer body.Close()
-	bodyBytes, err := ioutil.ReadAll(body)
+	bodyBytes, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Fatal(err)
 	}

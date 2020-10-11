@@ -58,7 +58,7 @@ func NewCache(onExpire *func(cache *Cache, key string)) *Cache {
 	go func() {
 		for {
 			cache.gc()
-			time.Sleep(5 * time.Second)
+			time.Sleep(time.Second)
 		}
 	}()
 	return cache
