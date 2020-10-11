@@ -4,11 +4,14 @@ import (
 	"container/heap"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"sync"
 	"time"
 	"unsafe"
 )
+
+var DEBUG = os.Getenv("DEBUG") != ""
 
 // 一个简易的内存缓存系统
 // 1. 支持设定过期时间，精度为秒级。
@@ -192,7 +195,9 @@ func (r *Cache) gc() {
 		return
 	}
 
-	log.Println("cache: GCing...")
+	if DEBUG {
+		log.Println("cache: GCing...")
+	}
 	r.RLock()
 	defer r.RUnlock()
 
