@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -52,6 +53,7 @@ func main() {
 		}
 
 		v := GetOneCrackResult(task)
+		go SendMe(fmt.Sprintf("2captcha pool getOne is called: %v", keyOfTask(task)))
 		if v == nil {
 			c.JSON(http.StatusAccepted, map[string]interface{}{"message": "not ready"})
 			return
@@ -80,6 +82,7 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, map[string]interface{}{"stopped": StopSite(task)})
+		go SendMe("2captcha pool stopped")
 	})
 
 	router.Run()
