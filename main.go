@@ -82,7 +82,7 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, map[string]interface{}{"stopped": StopSite(task)})
-		go SendMe("2captcha pool stopped")
+		go SendMe(fmt.Sprintf("2captcha pool stopOne is called: %v", keyOfTask(task)))
 	})
 
 	router.Run()
