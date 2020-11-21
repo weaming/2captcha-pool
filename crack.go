@@ -150,14 +150,19 @@ func reCaptchaTask(site *Site) {
 			if body == "ERROR_ZERO_BALANCE" {
 				log.Fatal("ERROR_ZERO_BALANCE")
 			}
-			captchaID := strings.SplitN(body, "|", 2)[1]
-			log.Println(captchaID)
+			if strings.Contains(body, "|") {
+				captchaID := strings.SplitN(body, "|", 2)[1]
+				log.Println(captchaID)
+				if captchaID == "" {
+					return
+				}
 
-			if captchaID == "" {
-				return
+				// get crack result
+				reCaptchaResult(site, captchaID)
+			} else {
+				log.Fatalf("response body: %s", body)
 			}
-			// get crack result
-			reCaptchaResult(site, captchaID)
+
 		}
 	}
 
